@@ -4,8 +4,8 @@
    ============================================================ */
 'use strict';
 (() => {
-  const VERSION = '1.1.0';
-  const LS = { cfg: 'dk_cfg', cache: 'dk_cache', queue: 'dk_queue', demo: 'dk_demo', cats: 'dk_custom_cats', installHide: 'dk_install_hide', startDay: 'dk_start_day' };
+  const VERSION = '1.2.0';
+  const LS = { cfg: 'dk_cfg', cache: 'dk_cache', queue: 'dk_queue', demo: 'dk_demo', cats: 'dk_custom_cats', installHide: 'dk_install_hide', startDay: 'dk_start_day', budget: 'dk_budget' };
   // Warna kategori (urutan tetap, divalidasi untuk buta warna). Kategori ke-9 dst. → abu-abu "Lainnya".
   const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
   const OTHER_COLOR = '#aab3c5';
@@ -127,7 +127,7 @@
       save(LS.cache, { transactions: d.transactions, categories: d.categories, accounts: d.accounts, meta: d.meta, at: Date.now() });
     }
   }
-  const mergeUnique = (a, b) => Array.from(new Set([].concat(a || [], b || []).filter(Boolean)));
+  const mergeUnique = (...arrs) => Array.from(new Set([].concat(...arrs.map((a) => a || [])).filter(Boolean)));
 
   /** Warna mengikuti kategori (bukan peringkat per periode) agar konsisten di semua grafik. */
   function computeColors() {
@@ -515,6 +515,7 @@
       '<div class="glass"><div class="k"><span class="arrow-ic">↓</span>Pemasukan</div><div class="v num">' + rp(a.s.inc) + '</div></div>' +
       '<div class="glass"><div class="k"><span class="arrow-ic">↑</span>Pengeluaran</div><div class="v num">' + rp(a.s.exp) + '</div></div>' +
       '</div><div class="hero-cmp">' + cmpText + '</div></section>';
+    h += renderBudgetCard();
     const top = a.cats[0];
     h += '<div class="stat-grid" style="margin-top:12px">' +
       '<div class="card stat"><div class="k">Rata-rata harian</div><div class="v num">' + rp(a.avg) + '</div><div class="s">pengeluaran / hari</div></div>' +
@@ -545,6 +546,7 @@
   }
 
   function bindHome(root) {
+    bindBudget(root);
     bindPeriodChips(root);
     bindBanners(root);
     bindTxRows(root);
@@ -751,6 +753,9 @@
       h += '</div>';
     }
 
+    h += '<div class="card"><h3 style="margin:0 0 4px;font-size:15px">💼 Anggaran</h3><p class="small muted" style="margin:0 0 12px">' +
+      S.budget.items.length + ' pos · total ' + rp(S.budget.items.reduce((s, i) => s + i.amount, 0)) + ' per periode</p>' +
+      '<button class="btn btn-ghost btn-block" data-act="budget-edit">Atur anggaran</button></div>';
     const sel = Array.from({ length: 28 }, (_, i) => i + 1).map((n) =>
       '<option value="' + n + '" ' + (n === S.startDay ? 'selected' : '') + '>Tanggal ' + n + (n === 1 ? ' (bulan kalender)' : '') + '</option>').join('');
     const ex = cycleOf(today());
@@ -772,6 +777,7 @@
   }
   function bindSettings(root) {
     bindBanners(root);
+    $$('[data-act="budget-edit"]', root).forEach((b) => b.addEventListener('click', openBudgetEditor));
     $('#s-startday', root).addEventListener('change', (e) => {
       S.startDay = Number(e.target.value);
       save(LS.startDay, S.startDay);
@@ -904,7 +910,7 @@
   }
 
   function toast(msg, type = 'success', ms = 2800) {
-    const icons = { success: '✓', error: '!', warn: '⏳', info: 'i' };
+    const icons = { success: '✓', error: '!', warn: '⏳', info: 'i', caution: '⚠' };
     const el = document.createElement('div');
     el.className = 'toast ' + type;
     el.setAttribute('role', type === 'error' ? 'alert' : 'status');
@@ -917,25 +923,210 @@
     setTimeout(kill, ms);
   }
 
+
+  /* ---------------- Anggaran (per periode gajian) ---------------- */
+  // Angka bawaan sesuai rencana: gaji Rp 6,4 jt (tgl 25) − tagihan PRT & listrik, sisanya dibagi
+  // makan 40%, transport 20%, tabungan 25%, sedekah 10%, jajan 5%; uang makan & bensin masuk ke posnya.
+  const DEFAULT_BUDGET = {
+    items: [
+      { name: 'Makan & Minum', icon: '🍽️', amount: 2820000, kind: 'daily', fund: 'Uang Makan' },
+      { name: 'Transportasi', icon: '🛵', amount: 1460000, kind: 'daily', fund: 'Uang Bensin' },
+      { name: 'Jajan', icon: '🍫', amount: 290000, kind: 'daily' },
+      { name: 'Tabungan', icon: '💰', amount: 1450000, kind: 'fixed' },
+      { name: 'Sedekah', icon: '🤲', amount: 580000, kind: 'fixed' },
+      { name: 'Tagihan PRT', icon: '🏠', amount: 400000, kind: 'bill' },
+      { name: 'Listrik', icon: '⚡', amount: 200000, kind: 'bill' },
+    ],
+    incomes: [
+      { name: 'Gaji', amount: 6400000, day: 25 },
+      { name: 'Uang Bensin', amount: 300000, day: 1 },
+      { name: 'Uang Makan', amount: 500000, day: 15 },
+    ],
+  };
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  S.budget = load(LS.budget, null) || clone(DEFAULT_BUDGET);
+  const sameCat = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  const budgetCats = (type) => (type === 'income' ? S.budget.incomes : S.budget.items).map((i) => i.name);
+
+  function budgetCycle() {
+    const c = cycleOf(today());
+    return { start: c.start, end: c.end, daysLeft: diffDays(today(), c.end) + 1 };
+  }
+  const sumCat = (type, name, r) => S.tx.filter((t) => t.type === type && t.date >= r.start && t.date <= r.end && sameCat(t.category, name))
+    .reduce((s, t) => s + t.amount, 0);
+  function expectedDate(day, r) {
+    const s = parseYmd(r.start);
+    let d = new Date(s.getFullYear(), s.getMonth(), day);
+    if (ymd(d) < r.start) d = new Date(s.getFullYear(), s.getMonth() + 1, day);
+    return ymd(d);
+  }
+
+  function renderBudgetCard() {
+    if (!S.budget || !S.budget.items.length) return '';
+    const r = budgetCycle();
+    const total = S.budget.items.reduce((s, i) => s + i.amount, 0);
+    let spentAll = 0;
+    const rows = S.budget.items.map((it, idx) => {
+      const spent = sumCat('expense', it.name, r);
+      spentAll += spent;
+      const p = it.amount > 0 ? spent / it.amount : 0;
+      const left = it.amount - spent;
+      let right, sub, color, bar = true;
+      if (it.kind === 'bill') {
+        bar = false;
+        right = spent >= it.amount * 0.95
+          ? '<span class="bud-badge ok">✓ Sudah dibayar</span>'
+          : '<button class="bud-btn" data-quick="' + idx + '">Catat bayar</button>';
+        sub = rp(it.amount) + ' / bulan' + (spent > 0 && spent < it.amount * 0.95 ? ' · baru ' + rp(spent) : '');
+      } else if (it.kind === 'fixed') {
+        color = C_INC;
+        right = '<span class="num"><b>' + rp(spent) + '</b> <span class="muted">/ ' + rpShort(it.amount) + '</span></span>';
+        sub = p >= 1 ? '<span class="ok">✓ Sudah disisihkan</span>'
+          : 'Belum disisihkan ' + rp(left) + ' <button class="bud-link" data-quick="' + idx + '">Catat</button>';
+      } else {
+        color = p > 1 ? C_EXP : p >= 0.8 ? '#f0a500' : 'var(--brand-1)';
+        right = '<span class="num"><b>' + rp(spent) + '</b> <span class="muted">/ ' + rpShort(it.amount) + '</span></span>';
+        sub = p > 1 ? '<span class="up">Lewat ' + rp(-left) + '</span>'
+          : 'Sisa ' + rp(left) + ' · aman <b class="num">' + rp(left / r.daysLeft) + '</b>/hari';
+        if (it.fund) {
+          const inc = S.budget.incomes.find((i) => sameCat(i.name, it.fund));
+          if (inc && sumCat('income', inc.name, r) <= 0) {
+            sub += '<br><span class="muted">termasuk ' + esc(inc.name.toLowerCase()) + ' ' + rpShort(inc.amount) + ' yang cair ' + fmtShort(expectedDate(inc.day, r)) + '</span>';
+          }
+        }
+      }
+      return '<div class="bud-item"><div class="bud-top"><span class="bud-name">' + (it.icon || '•') + ' ' + esc(it.name) + '</span>' + right + '</div>' +
+        (bar ? '<div class="track bud-track"><div style="width:' + Math.min(100, p * 100) + '%;background:' + color + '"></div></div>' : '') +
+        '<div class="bud-sub">' + sub + '</div></div>';
+    }).join('');
+
+    const incRows = S.budget.incomes.map((inc, idx) => {
+      const got = sumCat('income', inc.name, r);
+      const due = expectedDate(inc.day, r);
+      return '<div class="inc-row"><span>' + (got > 0 ? '<span class="ok">✓</span>' : '<span class="muted">○</span>') + ' ' + esc(inc.name) +
+        ' <span class="muted small">· tgl ' + inc.day + '</span></span>' +
+        (got > 0 ? '<span class="num ok">' + rp(got) + '</span>'
+          : '<span class="inc-right"><span class="muted small">' + (due < today() ? 'belum dicatat' : fmtShort(due)) + '</span>' +
+            '<button class="bud-btn" data-qinc="' + idx + '">Catat</button></span>') + '</div>';
+    }).join('');
+
+    return '<div class="section-title"><h2>Anggaran periode ini</h2><button class="link-btn" data-act="budget-edit">Atur</button></div>' +
+      '<div class="card bud-card"><div class="bud-head"><div><div class="muted small">' + fmtShort(r.start) + ' – ' + fmtShort(r.end) + ' · ' + r.daysLeft + ' hari lagi gajian</div>' +
+      '<div class="bud-total num">' + rp(spentAll) + ' <span class="muted">dari ' + rp(total) + '</span></div></div></div>' +
+      '<div class="track" style="margin:8px 0 6px"><div style="width:' + Math.min(100, (spentAll / Math.max(total, 1)) * 100) + '%;background:var(--grad)"></div></div>' +
+      rows + '<div class="inc-box"><div class="inc-title">Pemasukan periode ini</div>' + incRows + '</div></div>';
+  }
+
+  function bindBudget(root) {
+    $$('[data-act="budget-edit"]', root).forEach((b) => b.addEventListener('click', openBudgetEditor));
+    $$('[data-quick]', root).forEach((b) => b.addEventListener('click', () => {
+      const it = S.budget.items[+b.dataset.quick];
+      const r = budgetCycle();
+      const left = Math.max(0, it.amount - sumCat('expense', it.name, r));
+      openForm(null, { type: 'expense', category: it.name, amount: left || it.amount });
+    }));
+    $$('[data-qinc]', root).forEach((b) => b.addEventListener('click', () => {
+      const inc = S.budget.incomes[+b.dataset.qinc];
+      openForm(null, { type: 'income', category: inc.name, amount: inc.amount });
+    }));
+  }
+
+  /** Peringatan setelah mencatat pengeluaran: 80% dan 100% anggaran. */
+  function budgetWarn(tx) {
+    if (!S.budget || tx.type !== 'expense') return;
+    const it = S.budget.items.find((i) => sameCat(i.name, tx.category));
+    if (!it || it.kind !== 'daily' || !it.amount) return;
+    const r = budgetCycle();
+    if (tx.date < r.start || tx.date > r.end) return;
+    const sp = sumCat('expense', it.name, r);
+    const p = sp / it.amount, before = (sp - tx.amount) / it.amount;
+    if (p > 1 && before <= 1) toast('Anggaran ' + it.name + ' terlampaui ' + rp(sp - it.amount), 'error', 6000);
+    else if (p >= 0.8 && before < 0.8) toast('Anggaran ' + it.name + ' sudah terpakai ' + Math.round(p * 100) + '%', 'caution', 6000);
+  }
+
+  function openBudgetEditor() {
+    const w = clone(S.budget);
+    const KINDS = { daily: 'Harian', fixed: 'Disisihkan', bill: 'Tagihan' };
+    const m = openModal('<div class="sheet-head"><h3>Atur anggaran</h3><button class="close-x" data-close aria-label="Tutup">×</button></div><div id="be-body"></div>' +
+      '<div class="save-bar"><button class="btn btn-primary btn-block" id="be-save">Simpan anggaran</button></div>');
+    const body = $('#be-body', m.el);
+    const numIn = (val, attrs) => '<input class="input be-num" inputmode="numeric" value="' + (val ? nf.format(val) : '') + '" ' + attrs + '>';
+    const draw = () => {
+      const tB = w.items.reduce((s, i) => s + (i.amount || 0), 0), tI = w.incomes.reduce((s, i) => s + (i.amount || 0), 0);
+      body.innerHTML =
+        '<p class="small muted" style="margin:0 0 10px">Berlaku per periode gajian (mulai tgl ' + S.startDay + '). Nama pos harus sama dengan nama kategori saat mencatat.</p>' +
+        '<div class="be-sum"><span>Pemasukan <b class="num">' + rp(tI) + '</b></span><span>Anggaran <b class="num">' + rp(tB) + '</b></span>' +
+        '<span class="' + (tI - tB < 0 ? 'up' : 'ok') + '">' + (tI - tB < 0 ? 'Kurang ' : 'Belum dialokasikan ') + '<b class="num">' + rp(Math.abs(tI - tB)) + '</b></span></div>' +
+        '<div class="be-title">Pengeluaran</div>' +
+        w.items.map((it, i) => '<div class="be-row"><div class="be-name">' + (it.icon || '•') + ' ' + esc(it.name) + '<span class="muted small"> · ' + KINDS[it.kind] + '</span></div>' +
+          numIn(it.amount, 'data-item="' + i + '"') + '<button class="be-del" data-del="' + i + '" aria-label="Hapus pos">×</button></div>').join('') +
+        '<div class="be-add"><input class="input" id="be-new-name" placeholder="Pos baru, mis. Pulsa" maxlength="40">' +
+        '<select class="input" id="be-new-kind"><option value="daily">Harian</option><option value="bill">Tagihan</option><option value="fixed">Disisihkan</option></select>' +
+        numIn(0, 'id="be-new-amt" placeholder="Rp"') + '<button class="btn btn-ghost" id="be-add-btn">+ Tambah</button></div>' +
+        '<div class="be-title" style="margin-top:18px">Pemasukan rutin</div>' +
+        w.incomes.map((inc, i) => '<div class="be-row"><div class="be-name">' + esc(inc.name) + '</div>' +
+          '<label class="be-day">tgl <input class="input" type="number" min="1" max="31" inputmode="numeric" value="' + inc.day + '" data-day="' + i + '"></label>' +
+          numIn(inc.amount, 'data-inc="' + i + '"') + '</div>').join('') +
+        '<button class="link-btn" id="be-reset" style="margin-top:12px">Kembalikan ke rencana awal</button>';
+      $$('.be-num', body).forEach((inp) => inp.addEventListener('input', () => {
+        const d = inp.value.replace(/\D/g, '').slice(0, 12);
+        inp.value = d ? nf.format(+d) : '';
+        if (inp.dataset.item) w.items[+inp.dataset.item].amount = +d || 0;
+        if (inp.dataset.inc) w.incomes[+inp.dataset.inc].amount = +d || 0;
+      }));
+      $$('.be-num[data-item], .be-num[data-inc]', body).forEach((inp) => inp.addEventListener('change', draw));
+      $$('[data-day]', body).forEach((inp) => inp.addEventListener('change', () => {
+        w.incomes[+inp.dataset.day].day = Math.min(31, Math.max(1, +inp.value || 1));
+      }));
+      $$('[data-del]', body).forEach((b) => b.addEventListener('click', () => { w.items.splice(+b.dataset.del, 1); draw(); }));
+      $('#be-add-btn', body).addEventListener('click', () => {
+        const name = $('#be-new-name', body).value.trim();
+        const amount = +$('#be-new-amt', body).value.replace(/\D/g, '') || 0;
+        if (!name) return toast('Isi nama pos dulu', 'error');
+        if (w.items.some((i) => sameCat(i.name, name))) return toast('Pos itu sudah ada', 'error');
+        const kind = $('#be-new-kind', body).value;
+        w.items.push({ name, amount, kind, icon: kind === 'bill' ? '🧾' : kind === 'fixed' ? '📦' : '🏷️' });
+        draw();
+      });
+      $('#be-reset', body).addEventListener('click', async () => {
+        const ok = await confirmDialog({ title: 'Kembalikan ke rencana awal?', text: 'Semua angka anggaran diganti dengan rencana awal (gaji Rp 6,4 jt, PRT, listrik, dan pembagian %).', ok: 'Kembalikan' });
+        if (ok) { const d = clone(DEFAULT_BUDGET); w.items = d.items; w.incomes = d.incomes; draw(); }
+      });
+    };
+    draw();
+    $('#be-save', m.el).addEventListener('click', () => {
+      S.budget = w;
+      save(LS.budget, S.budget);
+      toast('Anggaran disimpan', 'success');
+      m.close();
+      refreshView();
+    });
+  }
+
   /* ---------------- Form tambah / edit ---------------- */
   function categoriesFor(type) {
     const used = {};
     S.tx.forEach((t) => { if (t.type === type) used[t.category] = (used[t.category] || 0) + 1; });
-    const base = mergeUnique(S.categories[type], Object.keys(used)).filter((c) => c !== 'Tanpa Kategori');
+    const bc = budgetCats(type);
+    const custom = (load(LS.cats, { income: [], expense: [] })[type]) || [];
+    // Jika anggaran aktif: tampilkan pos anggaran + kategori yang pernah dipakai (kategori bawaan yang tak terpakai disembunyikan).
+    const base = (bc.length ? mergeUnique(bc, Object.keys(used), custom, ['Lainnya']) : mergeUnique(S.categories[type], Object.keys(used)))
+      .filter((c) => c !== 'Tanpa Kategori');
     // Urutkan berdasar seberapa sering dipakai agar yang favorit selalu di depan; "Lainnya" di akhir.
     return base.sort((a, b) => (a === 'Lainnya') - (b === 'Lainnya') || (used[b] || 0) - (used[a] || 0));
   }
   const hasAccountCol = (type) => S.cfg.demo || !!(S.meta && S.meta[type] && S.meta[type].columns.account);
 
-  function openForm(existing) {
+  function openForm(existing, preset) {
     const edit = !!existing;
+    const src = existing || preset || null;
     const st = {
-      type: existing ? existing.type : 'expense',
-      amount: existing ? Math.round(existing.amount) : 0,
-      category: existing ? existing.category : '',
-      date: existing ? existing.date : today(),
-      note: existing ? existing.note : '',
-      account: existing ? existing.account : '',
+      type: src && src.type ? src.type : 'expense',
+      amount: src && src.amount ? Math.round(src.amount) : 0,
+      category: src && src.category ? src.category : '',
+      date: src && src.date ? src.date : today(),
+      note: src && src.note ? src.note : '',
+      account: src && src.account ? src.account : '',
     };
     const m = openModal(
       '<div class="sheet-head"><h3>' + (edit ? 'Edit transaksi' : 'Tambah transaksi') + '</h3><button class="close-x" data-close aria-label="Tutup">×</button></div>' +
@@ -1031,7 +1222,7 @@
 
     renderType();
     renderDate();
-    if (!edit) amt.focus();
+    if (!edit && !preset) amt.focus();
 
     $('#f-save', el).addEventListener('click', async () => {
       // Validasi
@@ -1065,6 +1256,7 @@
           const r = await api('add', { tx });
           S.tx.push(Object.assign({}, r.tx, { _seq: S.seq++ }));
           toast((st.type === 'income' ? 'Pemasukan ' : 'Pengeluaran ') + rp(st.amount) + ' tersimpan ✓', 'success');
+          setTimeout(() => budgetWarn(r.tx), 900);
         }
         afterLocalChange();
         m.close();
