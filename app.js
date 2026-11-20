@@ -4,7 +4,7 @@
    ============================================================ */
 'use strict';
 (() => {
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const LS = { cfg: 'dk_cfg', cache: 'dk_cache', queue: 'dk_queue', demo: 'dk_demo', cats: 'dk_custom_cats', installHide: 'dk_install_hide' };
   // Warna kategori (urutan tetap, divalidasi untuk buta warna). Kategori ke-9 dst. → abu-abu "Lainnya".
   const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
@@ -764,7 +764,11 @@
   function renderOnboarding() {
     return '<div class="onb"><div class="onb-hero"><img class="logo" src="icons/icon.svg" alt=""><h1>Selamat datang 👋</h1>' +
       '<p>Catat pemasukan & pengeluaran dari HP, langsung tersimpan ke Google Sheets milikmu.</p></div>' +
-      '<div class="card" style="margin-top:14px"><h3 style="margin:0 0 12px;font-size:15px">Cara paling mudah</h3><ol class="steps">' +
+      '<div class="card" style="margin-top:14px"><h3 style="margin:0 0 4px;font-size:15px">🔗 Tempel link setup</h3>' +
+      '<p class="small muted" style="margin:0 0 10px">Salin link dari WhatsApp/email (tekan lama link → Salin), lalu tempel di sini.</p>' +
+      '<textarea class="input" id="o-link" rows="3" placeholder="https://…/dompetku/#setup=…" autocomplete="off" autocapitalize="off" spellcheck="false" style="resize:none;font-size:13px"></textarea>' +
+      '<button class="btn btn-primary btn-block" id="o-link-go" style="margin-top:10px">Hubungkan</button></div>' +
+      '<div class="card" style="margin-top:12px"><h3 style="margin:0 0 12px;font-size:15px">Belum punya link?</h3><ol class="steps">' +
       '<li>Di spreadsheet (laptop), buka menu <b>📱 DompetKu → 2. Buat link untuk HP</b>.</li>' +
       '<li>Kirim link itu ke dirimu sendiri (mis. WhatsApp “chat ke diri sendiri”).</li>' +
       '<li>Buka link di HP. Selesai — aplikasi langsung terhubung.</li></ol></div>' +
@@ -776,6 +780,14 @@
   }
   function bindOnboarding(root) {
     $('#o-demo', root).addEventListener('click', startDemo);
+    const linkBtn = $('#o-link-go', root);
+    linkBtn.addEventListener('click', async () => {
+      const j = decodeSetup($('#o-link', root).value);
+      if (!j) return toast('Link tidak dikenali. Pastikan seluruh link tersalin (ada tulisan #setup=).', 'error', 5000);
+      linkBtn.disabled = true; linkBtn.innerHTML = '<span class="spinner"></span> Menghubungkan…';
+      const ok = await connect(j.u, j.t);
+      if (!ok) { linkBtn.disabled = false; linkBtn.textContent = 'Hubungkan'; }
+    });
     $('#o-connect', root).addEventListener('click', async () => {
       const url = $('#o-url', root).value.trim(), token = $('#o-token', root).value.trim();
       if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) return toast('URL Web App harus berakhiran /exec', 'error');
@@ -1227,16 +1239,24 @@
     render();
   }
 
-  function handleSetupLink() {
-    const m = location.hash.match(/#setup=([A-Za-z0-9_\-=]+)/);
+  /** Mengambil URL & kunci dari teks link setup (".../#setup=xxxx"). */
+  function decodeSetup(text) {
+    const m = String(text || '').match(/setup=([A-Za-z0-9_\-=]+)/);
     if (!m) return null;
-    history.replaceState(null, '', location.pathname + location.search);
     try {
-      let b = m[1].replace(/-/g, '+').replace(/_/g, '/');
+      let b = m[1].replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
       while (b.length % 4) b += '=';
       const j = JSON.parse(atob(b));
       if (j.u && j.t) return j;
     } catch (e) { /* abaikan */ }
+    return null;
+  }
+
+  function handleSetupLink() {
+    if (!/#setup=/.test(location.hash)) return null;
+    const j = decodeSetup(location.hash);
+    history.replaceState(null, '', location.pathname + location.search);
+    if (j) return j;
     toast('Link setup tidak valid. Buat ulang dari spreadsheet.', 'error', 5000);
     return null;
   }
