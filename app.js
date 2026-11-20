@@ -803,7 +803,7 @@
 
   /* ----- Onboarding ----- */
   function renderOnboarding() {
-    return '<div class="onb"><div class="onb-hero"><img class="logo" src="icons/icon.svg" alt=""><h1>Selamat datang 👋</h1>' +
+    return '<div class="onb"><div class="onb-hero"><img class="logo" src="icons/icon-v2.svg" alt=""><h1>Selamat datang 👋</h1>' +
       '<p>Catat pemasukan & pengeluaran dari HP, langsung tersimpan ke Google Sheets milikmu.</p></div>' +
       '<div class="card" style="margin-top:14px"><h3 style="margin:0 0 4px;font-size:15px">🔗 Tempel link setup</h3>' +
       '<p class="small muted" style="margin:0 0 10px">Salin link dari WhatsApp/email (tekan lama link → Salin), lalu tempel di sini.</p>' +
