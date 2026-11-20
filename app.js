@@ -4,8 +4,8 @@
    ============================================================ */
 'use strict';
 (() => {
-  const VERSION = '1.0.1';
-  const LS = { cfg: 'dk_cfg', cache: 'dk_cache', queue: 'dk_queue', demo: 'dk_demo', cats: 'dk_custom_cats', installHide: 'dk_install_hide' };
+  const VERSION = '1.1.0';
+  const LS = { cfg: 'dk_cfg', cache: 'dk_cache', queue: 'dk_queue', demo: 'dk_demo', cats: 'dk_custom_cats', installHide: 'dk_install_hide', startDay: 'dk_start_day' };
   // Warna kategori (urutan tetap, divalidasi untuk buta warna). Kategori ke-9 dst. → abu-abu "Lainnya".
   const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
   const OTHER_COLOR = '#aab3c5';
@@ -70,6 +70,7 @@
     catColor: {},
     installEvt: null,
     seq: 0,
+    startDay: Math.min(28, Math.max(1, Number(load('dk_start_day', 25)) || 25)),
   };
   const isConfigured = () => S.cfg.demo || (S.cfg.url && S.cfg.token);
 
@@ -185,6 +186,20 @@
   }
 
   /* ---------------- Periode & perhitungan ---------------- */
+  /* Periode bulanan (siklus gajian): mulai tanggal S.startDay sampai sehari sebelum tanggal itu bulan berikutnya. */
+  const isPayCycle = () => S.startDay !== 1;
+  function cycleOf(dateStr, shift = 0) {
+    const d = parseYmd(dateStr);
+    const sd = S.startDay;
+    let y = d.getFullYear(), m = d.getMonth();
+    if (d.getDate() < sd) m -= 1;
+    m += shift;
+    const start = new Date(y, m, sd);
+    const end = new Date(y, m + 1, sd - 1);
+    return { start: ymd(start), end: ymd(end), endMonth: end.getMonth(), endYear: end.getFullYear() };
+  }
+  const rangeLabel = (a, b) => fmtShort(a) + ' – ' + fmtShort(b);
+
   function periodRange(p = S.period) {
     const t = today();
     if (p.key === 'today') {
@@ -202,12 +217,15 @@
         prev: { start: addDays(p.start, -len), end: addDays(p.start, -1) },
       };
     }
-    const d = parseYmd(t);
-    const s = ymd(new Date(d.getFullYear(), d.getMonth(), 1));
-    const lastPrev = new Date(d.getFullYear(), d.getMonth(), 0).getDate();
+    // Bulan ini / periode gajian (sampai hari ini), dibanding jumlah hari yang sama di periode sebelumnya.
+    const cur = cycleOf(t), prv = cycleOf(t, -1);
+    const elapsed = diffDays(cur.start, t);
+    const prevEnd = addDays(prv.start, elapsed) < prv.end ? addDays(prv.start, elapsed) : prv.end;
     return {
-      start: s, end: t, label: 'Bulan ini', prevLabel: 'periode yang sama bulan lalu',
-      prev: { start: ymd(new Date(d.getFullYear(), d.getMonth() - 1, 1)), end: ymd(new Date(d.getFullYear(), d.getMonth() - 1, Math.min(d.getDate(), lastPrev))) },
+      start: cur.start, end: t, cycleEnd: cur.end,
+      label: isPayCycle() ? 'Periode ' + rangeLabel(cur.start, cur.end) : 'Bulan ini',
+      prevLabel: isPayCycle() ? 'periode gajian lalu' : 'periode yang sama bulan lalu',
+      prev: { start: prv.start, end: prevEnd },
     };
   }
   const inRange = (r) => (t) => t.date >= r.start && t.date <= r.end;
@@ -245,6 +263,16 @@
 
   function insightItems(a, full) {
     const items = [];
+    if (S.period.key === 'month' && a.r.cycleEnd) {
+      const left = diffDays(today(), a.r.cycleEnd) + 1;
+      const nextDay = addDays(a.r.cycleEnd, 1);
+      const what = isPayCycle() ? 'gajian (' + fmtShort(nextDay) + ')' : 'akhir bulan';
+      items.push({
+        ic: '⏳', t: left + ' hari lagi menuju ' + what,
+        d: a.s.net > 0 ? 'Sisa saldo ' + rp(a.s.net) + ' ≈ <b class="num">' + rp(a.s.net / left) + '</b>/hari'
+          : '<span class="up">Saldo periode ini sudah minus ' + rp(-a.s.net) + '</span>',
+      });
+    }
     const top = a.cats[0];
     if (full) {
       items.push({ ic: '🏆', t: 'Kategori pengeluaran terbesar', d: top ? esc(top.name) + ' · ' + rp(top.amount) + ' <span class="muted">(' + pct((top.amount / a.s.exp) * 100) + ')</span>' : 'Belum ada pengeluaran' });
@@ -275,7 +303,7 @@
 
   /* ---------------- Komponen ---------------- */
   function periodChips() {
-    const opts = [['today', 'Hari ini'], ['week', 'Minggu ini'], ['month', 'Bulan ini'], ['custom', S.period.key === 'custom' ? periodRange().label : 'Pilih tanggal…']];
+    const opts = [['today', 'Hari ini'], ['week', 'Minggu ini'], ['month', isPayCycle() ? 'Periode gaji' : 'Bulan ini'], ['custom', S.period.key === 'custom' ? periodRange().label : 'Pilih tanggal…']];
     return '<div class="chips" role="tablist">' + opts.map(([k, l]) =>
       '<button class="chip ' + (S.period.key === k ? 'active' : '') + '" data-period="' + k + '">' + (k === 'custom' ? '📆 ' : '') + esc(l) + '</button>').join('') + '</div>';
   }
@@ -668,19 +696,18 @@
         (chartClipped ? '<br>Batang bertanda celah putih = nilai sangat besar, dipotong agar hari lain terbaca' : '') + '</div>' + dailySvg + '</div>';
 
       // 4. Tren bulanan 6 bulan
-      const now = parseYmd(today());
       const monthBuckets = [];
       for (let i = 5; i >= 0; i--) {
-        const m0 = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const ms = ymd(m0), me = ymd(new Date(m0.getFullYear(), m0.getMonth() + 1, 0));
-        const s = summarize(S.tx.filter(inRange({ start: ms, end: me })));
+        const c = cycleOf(today(), -i);
+        const s = summarize(S.tx.filter(inRange(c)));
+        const title = isPayCycle() ? rangeLabel(c.start, c.end) + ' ' + c.endYear : MON[c.endMonth] + ' ' + c.endYear;
         monthBuckets.push({
-          label: MON[m0.getMonth()], values: [s.inc, s.exp],
-          tip: '<b>' + MON[m0.getMonth()] + ' ' + m0.getFullYear() + '</b> · Masuk <b class="num">' + rp(s.inc) + '</b> · Keluar <b class="num">' + rp(s.exp) + '</b> · Saldo <b class="num">' + rp(s.net) + '</b>',
+          label: MON[c.endMonth], values: [s.inc, s.exp],
+          tip: '<b>' + title + '</b> · Masuk <b class="num">' + rp(s.inc) + '</b> · Keluar <b class="num">' + rp(s.exp) + '</b> · Saldo <b class="num">' + rp(s.net) + '</b>',
         });
       }
       chartData.monthly = monthBuckets;
-      h += '<div class="card chart-card"><h3>Tren bulanan</h3><div class="sub">6 bulan terakhir</div>' +
+      h += '<div class="card chart-card"><h3>Tren bulanan</h3><div class="sub">' + (isPayCycle() ? '6 periode gajian terakhir (mulai tgl ' + S.startDay + ') · label = bulan berakhirnya periode' : '6 bulan terakhir') + '</div>' +
         '<div class="legend-inline"><span><i style="background:' + C_INC + '"></i>Pemasukan</span><span><i style="background:' + C_EXP + '"></i>Pengeluaran</span></div>' +
         barChart('chart-monthly', monthBuckets, [{ name: 'Pemasukan', color: C_INC }, { name: 'Pengeluaran', color: C_EXP }], { groupW: 50 }) + '</div>';
     }
@@ -724,6 +751,14 @@
       h += '</div>';
     }
 
+    const sel = Array.from({ length: 28 }, (_, i) => i + 1).map((n) =>
+      '<option value="' + n + '" ' + (n === S.startDay ? 'selected' : '') + '>Tanggal ' + n + (n === 1 ? ' (bulan kalender)' : '') + '</option>').join('');
+    const ex = cycleOf(today());
+    h += '<div class="card"><h3 style="margin:0 0 4px;font-size:15px">📅 Awal periode bulanan</h3>' +
+      '<p class="small muted" style="margin:0 0 10px">Pilih tanggal gajian. Filter "Periode gaji", grafik bulanan, dan insight akan mengikuti tanggal ini.</p>' +
+      '<select class="input" id="s-startday">' + sel + '</select>' +
+      '<p class="small" style="margin:8px 0 0">Periode sekarang: <b>' + fmtDate(ex.start) + ' – ' + fmtDate(ex.end) + '</b></p></div>';
+
     h += '<div class="card"><h3 style="margin:0 0 4px;font-size:15px">Pasang di layar utama</h3><p class="small muted" style="margin:0 0 12px">' +
       (isStandalone() ? '✅ DompetKu sudah terpasang.' : 'Buka DompetKu seperti aplikasi biasa, langsung dari layar utama HP.') + '</p>' +
       (isStandalone() ? '' : '<button class="btn btn-ghost btn-block" data-act="install">📲 Cara memasang</button>') + '</div>';
@@ -737,6 +772,12 @@
   }
   function bindSettings(root) {
     bindBanners(root);
+    $('#s-startday', root).addEventListener('change', (e) => {
+      S.startDay = Number(e.target.value);
+      save(LS.startDay, S.startDay);
+      toast(S.startDay === 1 ? 'Periode bulanan: per bulan kalender' : 'Periode bulanan: mulai tanggal ' + S.startDay, 'success');
+      render();
+    });
     const test = $('#s-test', root);
     if (test) test.addEventListener('click', async () => {
       test.disabled = true; test.innerHTML = '<span class="spinner" style="border-color:#c7cde0;border-top-color:var(--brand-1)"></span>';
