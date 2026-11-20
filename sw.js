@@ -1,6 +1,6 @@
 /* DompetKu – Service Worker: aplikasi tetap terbuka cepat & bisa dipakai saat sinyal lemah.
    Data transaksi TIDAK disimpan di sini; hanya file tampilan aplikasi. */
-const CACHE = 'dompetku-v1.1.0';
+const CACHE = 'dompetku-v1.1.1';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
